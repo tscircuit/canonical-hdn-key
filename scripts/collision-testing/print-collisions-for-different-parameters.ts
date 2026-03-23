@@ -38,18 +38,19 @@ interface ProjectedSample {
 interface ParameterRow {
   binsPerSide: number
   ratioBucketsPerOctave: number
-  sampleCount: number
   uniqueKeys: number
   collidingKeys: number
   collisionSamples: number
   mixedDidSolveKeys: number
   errorCollisions: number
+  accuracyPercent: number
 }
 
 interface LoadSamplesResult {
   samples: ProjectedSample[]
   skippedSharedNetSamples: number
   skippedOutOfRangeAspectSamples: number
+  skippedTooManyPairSamples: number
   missingProblemFiles: string[]
 }
 
@@ -59,9 +60,10 @@ interface CliOptions {
   resultId?: string
 }
 
-const DEFAULT_BINS_PER_SIDE = [2, 4, 8, 16, 32, 64]
-const DEFAULT_RATIO_BUCKETS_PER_OCTAVE = [2, 4, 8, 16]
+const DEFAULT_BINS_PER_SIDE = [1, 2, 4, 8, 16, 32, 64]
+const DEFAULT_RATIO_BUCKETS_PER_OCTAVE = [1, 2, 4, 8, 16]
 const MAX_SUPPORTED_ASPECT_RATIO = 4
+const MAX_INCLUDED_PAIR_COUNT = 7
 const DATASET_ROOT = fileURLToPath(
   new URL("../../node_modules/high-density-dataset-z04/", import.meta.url),
 )
@@ -142,9 +144,9 @@ function printHelp(): void {
       "Usage: bun run scripts/collision-testing/print-collisions-for-different-parameters.ts [options]",
       "",
       "Options:",
-      `  --bins=2,4,8,16,32,64   Comma-separated binsPerSide values (default: ${DEFAULT_BINS_PER_SIDE.join(",")})`,
-      `  --ratios=2,4,8,16     Comma-separated ratioBucketsPerOctave values (default: ${DEFAULT_RATIO_BUCKETS_PER_OCTAVE.join(",")})`,
-      "  --ratio=<n>           Shorthand for a single ratioBucketsPerOctave value",
+      `  --bins=1,2,4,8,16,32,64   Comma-separated binsPerSide values (default: ${DEFAULT_BINS_PER_SIDE.join(",")})`,
+      `  --ratios=1,2,4,8,16       Comma-separated ratioBuckets values (default: ${DEFAULT_RATIO_BUCKETS_PER_OCTAVE.join(",")})`,
+      "  --ratio=<n>           Shorthand for a single ratioBuckets value",
       "  --result-id=<id>      Use a specific z04 results entry instead of the latest one",
       "  --help                Show this help",
     ].join("\n"),
@@ -179,6 +181,7 @@ function loadUniqueNetSamples(
   const missingProblemFiles: string[] = []
   let skippedSharedNetSamples = 0
   let skippedOutOfRangeAspectSamples = 0
+  let skippedTooManyPairSamples = 0
 
   for (const row of rows) {
     const problemPath = join(PROBLEMS_DIR, row.fileName)
@@ -201,6 +204,10 @@ function loadUniqueNetSamples(
       skippedOutOfRangeAspectSamples += 1
       continue
     }
+    if (getUniqueNetPairCount(rawProblem) > MAX_INCLUDED_PAIR_COUNT) {
+      skippedTooManyPairSamples += 1
+      continue
+    }
 
     samples.push({
       fileName: row.fileName,
@@ -213,6 +220,7 @@ function loadUniqueNetSamples(
     samples,
     skippedSharedNetSamples,
     skippedOutOfRangeAspectSamples,
+    skippedTooManyPairSamples,
     missingProblemFiles,
   }
 }
@@ -237,6 +245,10 @@ function getAspectRatio(width: number, height: number): number {
   const lo = Math.min(width, height)
   const hi = Math.max(width, height)
   return hi / lo
+}
+
+function getUniqueNetPairCount(problem: RawProblem): number {
+  return problem.portPoints.length / 2
 }
 
 // Match the z04 dataset's nearest-edge perimeter projection for interior points.
@@ -377,13 +389,18 @@ function analyzeParameters(
   return {
     binsPerSide,
     ratioBucketsPerOctave,
-    sampleCount: samples.length,
     uniqueKeys: buckets.size,
     collidingKeys,
     collisionSamples,
     mixedDidSolveKeys,
     errorCollisions,
+    accuracyPercent:
+      collidingKeys > 0 ? (1 - errorCollisions / collidingKeys) * 100 : 100,
   }
+}
+
+function formatAccuracyPercent(value: number): string {
+  return `${value.toFixed(2)}%`
 }
 
 function formatTable(rows: readonly ParameterRow[]): string {
@@ -393,12 +410,8 @@ function formatTable(rows: readonly ParameterRow[]): string {
       get: (row: ParameterRow) => String(row.binsPerSide),
     },
     {
-      header: "ratioBucketsPerOctave",
+      header: "ratioBuckets",
       get: (row: ParameterRow) => String(row.ratioBucketsPerOctave),
-    },
-    {
-      header: "sampleCount",
-      get: (row: ParameterRow) => String(row.sampleCount),
     },
     {
       header: "uniqueKeys",
@@ -419,6 +432,10 @@ function formatTable(rows: readonly ParameterRow[]): string {
     {
       header: "errorCollisions",
       get: (row: ParameterRow) => String(row.errorCollisions),
+    },
+    {
+      header: "accuracy",
+      get: (row: ParameterRow) => formatAccuracyPercent(row.accuracyPercent),
     },
   ]
 
@@ -452,6 +469,7 @@ async function main(): Promise<void> {
     samples,
     skippedSharedNetSamples,
     skippedOutOfRangeAspectSamples,
+    skippedTooManyPairSamples,
     missingProblemFiles,
   } = loadUniqueNetSamples(selectedResult.data)
 
@@ -471,6 +489,7 @@ async function main(): Promise<void> {
   console.log(
     `skipped aspect-ratio > ${MAX_SUPPORTED_ASPECT_RATIO}: ${skippedOutOfRangeAspectSamples}`,
   )
+  console.log(`skipped point pairs >= 8: ${skippedTooManyPairSamples}`)
   console.log(`missing problem files: ${missingProblemFiles.length}`)
   if (missingProblemFiles.length > 0) {
     console.log(`missing file names: ${missingProblemFiles.join(", ")}`)
@@ -482,8 +501,12 @@ async function main(): Promise<void> {
     `note: only samples with aspect ratio between 1:${MAX_SUPPORTED_ASPECT_RATIO} and ${MAX_SUPPORTED_ASPECT_RATIO}:1 are included.`,
   )
   console.log(
+    `note: only samples with fewer than ${MAX_INCLUDED_PAIR_COUNT + 1} point pairs are included.`,
+  )
+  console.log(
     "note: errorCollisions sums min(trueCount, falseCount) per key bucket, so a collision only counts when same-key samples disagree on didSolve.",
   )
+  console.log("note: accuracy = 100 * (1 - errorCollisions / collidingKeys).")
   console.log("")
   console.log(formatTable(rows))
 }
