@@ -65,7 +65,10 @@ const DEFAULT_BINS_PER_SIDE = [1, 2, 4, 8, 16, 32, 64]
 const DEFAULT_RATIO_BUCKETS_PER_OCTAVE = [1, 2, 4, 8, 16, 32]
 const MAX_SUPPORTED_ASPECT_RATIO = 4
 const MAX_INCLUDED_PAIR_COUNT = 7
-const VALIDATION_SIZE_MARGIN_FRACTION = 0.1
+const FAILING_SET_SHRINK_FRACTION = 0.1
+const FAILING_SET_LINEAR_SCALE = 1 - FAILING_SET_SHRINK_FRACTION
+const FAILING_SET_AREA_SCALE =
+  FAILING_SET_LINEAR_SCALE * FAILING_SET_LINEAR_SCALE
 const DATASET_ROOT = fileURLToPath(
   new URL("../../node_modules/dataset-z09/", import.meta.url),
 )
@@ -382,6 +385,10 @@ function serializeWords(words: Float64Array): string {
   return Array.from(words, (value) => String(value)).join(",")
 }
 
+function getFailingArea(sample: ProjectedSample): number {
+  return sample.area * FAILING_SET_AREA_SCALE
+}
+
 function analyzeParameters(
   trainingSamples: readonly ProjectedSample[],
   validationSamples: readonly ProjectedSample[],
@@ -429,10 +436,7 @@ function analyzeParameters(
     }
 
     validationHits += 1
-    if (
-      sample.area <=
-      bucket.storedArea * (1 - VALIDATION_SIZE_MARGIN_FRACTION)
-    ) {
+    if (bucket.storedArea <= getFailingArea(sample)) {
       errorCollisions += 1
     }
   }
@@ -579,7 +583,10 @@ async function main(): Promise<void> {
   )
   console.log("note: size means node area (width * height).")
   console.log(
-    `note: training stores the minimum area seen for each cache key; validation is an error collision when a hit's area is at least ${(VALIDATION_SIZE_MARGIN_FRACTION * 100).toFixed(0)}% smaller than the stored area.`,
+    `note: the failing set is built by shrinking each validation node by ${(FAILING_SET_SHRINK_FRACTION * 100).toFixed(0)}% in width and height.`,
+  )
+  console.log(
+    "note: training stores the minimum area seen for each cache key; validation is an error collision when the recalled training area is at or below the failing-set area.",
   )
   console.log("")
   console.log(formatTable(rows))
