@@ -44,6 +44,7 @@ interface LoadSamplesResult {
   skippedSharedNetSamples: number
   skippedOutOfRangeAspectSamples: number
   skippedTooManyPairSamples: number
+  skippedRequestedPairCountSamples: number
   sampleFileCount: number
   solvableTrueSamples: number
   solvableFalseSamples: number
@@ -53,6 +54,7 @@ interface CliOptions {
   binsPerSide: number[]
   ratioBucketsPerOctaveList: number[]
   split: Split
+  pairCount?: number
 }
 
 interface Split {
@@ -81,7 +83,9 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
     split: parseSplit("70/30"),
   }
 
-  for (const arg of argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]!
+
     if (arg === "--help") {
       printHelp()
       process.exit(0)
@@ -115,6 +119,24 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
       continue
     }
 
+    if (arg.startsWith("--pair-count=")) {
+      options.pairCount = parsePairCount(
+        arg.slice("--pair-count=".length),
+        "pair-count",
+      )
+      continue
+    }
+
+    if (arg === "--pair-count") {
+      const next = argv[index + 1]
+      if (next === undefined) {
+        throw new Error("Expected an integer after --pair-count.")
+      }
+      options.pairCount = parsePairCount(next, "pair-count")
+      index += 1
+      continue
+    }
+
     throw new Error(`Unknown argument: ${arg}`)
   }
 
@@ -142,6 +164,16 @@ function parseNonNegativeInteger(value: string, label: string): number {
     )
   }
   return Number(value)
+}
+
+function parsePairCount(value: string, label: string): number {
+  const pairCount = parseNonNegativeInteger(value, label)
+  if (pairCount < 1 || pairCount > MAX_INCLUDED_PAIR_COUNT) {
+    throw new Error(
+      `Expected --${label} to be between 1 and ${MAX_INCLUDED_PAIR_COUNT}, received "${value}".`,
+    )
+  }
+  return pairCount
 }
 
 function parseSplit(value: string): Split {
@@ -181,12 +213,13 @@ function printHelp(): void {
       `  --ratios=1,2,4,8,16,32    Comma-separated ratioBuckets values (default: ${DEFAULT_RATIO_BUCKETS_PER_OCTAVE.join(",")})`,
       "  --ratio=<n>           Shorthand for a single ratioBuckets value",
       "  --split=70/30         Train/validation split over filtered samples",
+      `  --pair-count=4        Only include samples with exactly this many point pairs (1-${MAX_INCLUDED_PAIR_COUNT})`,
       "  --help                Show this help",
     ].join("\n"),
   )
 }
 
-function loadFilteredSamples(): LoadSamplesResult {
+function loadFilteredSamples(options: CliOptions): LoadSamplesResult {
   const sampleFileNames = readdirSync(SAMPLES_DIR)
     .filter((name) => /^sample\d+\.json$/.test(name))
     .sort()
@@ -199,6 +232,7 @@ function loadFilteredSamples(): LoadSamplesResult {
   let skippedSharedNetSamples = 0
   let skippedOutOfRangeAspectSamples = 0
   let skippedTooManyPairSamples = 0
+  let skippedRequestedPairCountSamples = 0
   let solvableTrueSamples = 0
   let solvableFalseSamples = 0
 
@@ -220,8 +254,13 @@ function loadFilteredSamples(): LoadSamplesResult {
       skippedOutOfRangeAspectSamples += 1
       continue
     }
-    if (getUniqueNetPairCount(rawSample) > MAX_INCLUDED_PAIR_COUNT) {
+    const pairCount = getUniqueNetPairCount(rawSample)
+    if (pairCount > MAX_INCLUDED_PAIR_COUNT) {
       skippedTooManyPairSamples += 1
+      continue
+    }
+    if (options.pairCount !== undefined && pairCount !== options.pairCount) {
+      skippedRequestedPairCountSamples += 1
       continue
     }
 
@@ -239,6 +278,7 @@ function loadFilteredSamples(): LoadSamplesResult {
     skippedSharedNetSamples,
     skippedOutOfRangeAspectSamples,
     skippedTooManyPairSamples,
+    skippedRequestedPairCountSamples,
     sampleFileCount: sampleFileNames.length,
     solvableTrueSamples,
     solvableFalseSamples,
@@ -534,10 +574,11 @@ async function main(): Promise<void> {
     skippedSharedNetSamples,
     skippedOutOfRangeAspectSamples,
     skippedTooManyPairSamples,
+    skippedRequestedPairCountSamples,
     sampleFileCount,
     solvableTrueSamples,
     solvableFalseSamples,
-  } = loadFilteredSamples()
+  } = loadFilteredSamples(options)
 
   if (samples.length === 0) {
     throw new Error("No dataset-z09 samples were available after filtering.")
@@ -572,6 +613,11 @@ async function main(): Promise<void> {
     `skipped aspect-ratio > ${MAX_SUPPORTED_ASPECT_RATIO}: ${skippedOutOfRangeAspectSamples}`,
   )
   console.log(`skipped point pairs >= 8: ${skippedTooManyPairSamples}`)
+  if (options.pairCount !== undefined) {
+    console.log(
+      `skipped point pairs != ${options.pairCount}: ${skippedRequestedPairCountSamples}`,
+    )
+  }
   console.log(
     "note: port points are mapped onto the nearest perimeter edge before binning.",
   )
@@ -581,6 +627,11 @@ async function main(): Promise<void> {
   console.log(
     `note: only samples with fewer than ${MAX_INCLUDED_PAIR_COUNT + 1} point pairs are included.`,
   )
+  if (options.pairCount !== undefined) {
+    console.log(
+      `note: this run is further restricted to samples with exactly ${options.pairCount} point pairs.`,
+    )
+  }
   console.log("note: size means node area (width * height).")
   console.log(
     `note: the failing set is built by shrinking each validation node by ${(FAILING_SET_SHRINK_FRACTION * 100).toFixed(0)}% in width and height.`,

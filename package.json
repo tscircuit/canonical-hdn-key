@@ -5,6 +5,7 @@
   "private": true,
   "devDependencies": {
     "@biomejs/biome": "^2.4.8",
+    "@tscircuit/capacity-autorouter": "^0.0.366",
     "@types/bun": "latest",
     "dataset-z09": "github:tscircuit/dataset-z09#8260780",
     "high-density-dataset-z04": "github:tscircuit/high-density-dataset-z04#137370563bd98310f08baa78f4800cd5a6849274"
